@@ -1,6 +1,8 @@
 """
 generate golfball using cube platonic solid as framework
-copy-paste the code into blender's text editor to run it, make sure the viewport is in "object mode"
+copy-paste the code into blender's text editor to run it
+make sure the viewport is in "object mode"
+modify input section for configurations (dimple number, depth, radius etc.)
 """
 import bpy
 import numpy as np
@@ -19,16 +21,16 @@ def adjust_length(points, radii):
     return adjusted_points
 
 
-def generate_random_points(num_points, radii): 
+def generate_random_points(num_points): 
     # generate points on a designated area
     points = []
     while len(points) < num_points:
         phi = np.random.uniform(-1 * np.pi / 4, np.pi / 4)
         costheta = np.random.uniform(0, 1)
         theta = np.arccos(costheta)
-        x = np.sin(theta) * np.cos(phi) * radii
-        y = np.sin(theta) * np.sin(phi) * radii
-        z = np.cos(theta) * radii
+        x = np.sin(theta) * np.cos(phi)
+        y = np.sin(theta) * np.sin(phi)
+        z = np.cos(theta)
         point = np.array([x, y, z])
         if (np.inner(point, np.array([1, 1, 0])) > 0) and (np.inner(point, np.array([-1, 0, 1])) > 0) and (np.inner(point, np.array([1, -1, 0])) > 0):
             points.append(point)
@@ -46,6 +48,18 @@ def remove_outside_points(points):
     return points
 
 
+def remove_outside_points_2(points, radii):
+    max_radii = max(radii)
+    i = 0
+    while i < len(points):
+        if (np.inner(points[i], np.array([-1, -1, 0]) * one_over_root_2) > max_radii) or (np.inner(points[i], np.array([-1, 1, 0]) * one_over_root_2) > max_radii) or (np.inner(points[i], np.array([1, 0, -1]) * one_over_root_2) > max_radii):
+            del points[i]
+            del radii[i]
+        else:
+            i = i + 1
+    return points, radii
+
+
 def rodrigues_rotation(axis, point, angle):
     rotated = angle[0] * point + angle[1] * np.cross(axis, point) + (1 - angle[0]) * np.inner(axis, point) * axis
     return rotated
@@ -61,21 +75,18 @@ def rotation(points):
         
     full_points = []
     for point in full_face_points:
-        full_points.append(point)
-        full_points.append(point * np.array([-1, 1, -1]))
-        full_points.append(rodrigues_rotation(np.array([1, 1, 1]) * one_over_root_3, point, degree_120))
-        full_points.append(rodrigues_rotation(np.array([1, 1, 1]) * one_over_root_3, point, degree_240))
-        full_points.append(rodrigues_rotation(np.array([-1, -1, 1]) * one_over_root_3, point, degree_120))
-        full_points.append(rodrigues_rotation(np.array([-1, -1, 1]) * one_over_root_3, point, degree_240))
+        half_points = [point, rodrigues_rotation(np.array([1, 1, 1]) * one_over_root_3, point, degree_120), rodrigues_rotation(np.array([1, 1, 1]) * one_over_root_3, point, degree_240)]
+        full_points.extend(half_points)
+        full_points.extend([np.array([1, -1, -1]) * half_points[0], np.array([-1, 1, -1]) * half_points[1], np.array([-1, -1, 1]) * half_points[2]])
     return full_points
 
 
-def lloyd_relaxation_algorithm(iteration, points, radius, center):
+def lloyd_relaxation_algorithm(iteration, points, center):
     i = 1
     point1 = np.array([])
     while i < iteration:
         point1 = points.copy()
-        sv = SphericalVoronoi(points, radius, center)
+        sv = SphericalVoronoi(points, 1, center)
         sv.sort_vertices_of_regions()
         centroids = []
         for region in sv.regions:
@@ -94,12 +105,11 @@ def lloyd_relaxation_algorithm(iteration, points, radius, center):
             polygon_yz = Polygon(flat_region_point_yz)
             centroid_yz = polygon_yz.centroid
             centroid_point = np.array([centroid_xy.x, centroid_xy.y, centroid_yz.y])
-            projected_central_point = centroid_point * radius / np.linalg.norm(centroid_point)
+            projected_central_point = centroid_point / np.linalg.norm(centroid_point)
             centroids.append(projected_central_point)
         points = list(np.array(centroids.copy()))
         points = remove_outside_points(points)
-        points = adjust_length(points, radius)
-        points = np.array(rotation(points))
+        points = rotation(points)
         print("performing lloyd relaxation: " + str(i) + "/" + str(iteration))
         i = i + 1
     return point1
@@ -107,7 +117,6 @@ def lloyd_relaxation_algorithm(iteration, points, radius, center):
 
 def draw_radius(points, factor):
     # draw radius given the position of each dimple center
-    points = list(points)
     radius = []
     for i in range(len(points)):
         distance = []
@@ -116,7 +125,7 @@ def draw_radius(points, factor):
         for j in range(len(points1)):
             distance.append(np.linalg.norm(points[i] - points1[j]))
         radius.append(min(distance) * 0.5)
-    return np.array(radius) * factor
+    return [rad * factor for rad in radius]
 
 
 def cut(sphere, obj):
@@ -151,16 +160,16 @@ def create_hole_cut(shape, sphere_radius, sphere, radius, location, height, angl
 
 def rotate(obj, location):
     # for cone and frustum, its orientation needs to be adjusted to point towards the center
-    current_direction = obj.matrix_world.to_quaternion() @ mathutils.Vector((0, 0, 1))
+    current_direction = obj.matrix_world.to_quaternion() @ Vector((0, 0, 1))
     obj.rotation_mode = 'QUATERNION'
     obj.rotation_quaternion = current_direction.rotation_difference(-1 * location)
 
 
 def create_smooth_sphere(true_radius, location):
-    bpy.ops.mesh.primitive_ico_sphere_add(radius=true_radius, subdivisions=4, location=location) # adjust if needed
+    bpy.ops.mesh.primitive_ico_sphere_add(radius=true_radius, subdivisions=4, location=location) # adjust if needed, the higher, the smoother
     cube = bpy.context.object
     subsurf_modifier = cube.modifiers.new(name="Subdivision", type='SUBSURF')
-    subsurf_modifier.levels = 3 # adjust if needed
+    subsurf_modifier.levels = 3 # adjust if needed, the higher, the smoother
     bpy.ops.object.modifier_apply(modifier=subsurf_modifier.name)
     vertices = []
     distance = []
@@ -237,17 +246,6 @@ def piece_together(sphere):
     bpy.ops.mesh.remove_doubles(threshold=0.0001)  # adjust if needed
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    
-def remove_outside_points_2(points, radii):
-    i = 0
-    while i < len(points):
-        if (-0.1 * sphere_radius <= points[i][0] <= 0.8 * sphere_radius) and (-0.65 * sphere_radius <= points[i][1] <= 0.65 * sphere_radius) and (points[i][2] >= 0.55 * sphere_radius):
-            i = i + 1
-        else:
-            del points[i]
-            del radii[i]
-    return np.array(points), np.array(radii)
-
 
 
 '''
@@ -269,7 +267,7 @@ dimples_per_unit = 20
 iteration = 1000
 radius_factor = 0.95
 depth = 0.5
-shape = "cone" 
+shape = "sphere" 
 angle = 70 
 
 #constant
@@ -287,25 +285,27 @@ bpy.ops.object.delete(use_global=False)
 
 # first, random points will be generated on the designated part of the region
 print("generating random points")
-points = list(generate_random_points(dimples_per_unit, sphere_radius))
-points = adjust_length(points, sphere_radius)
+points = list(generate_random_points(dimples_per_unit))
 
 # then, copy and rotate these points such that they fill the whole sphere
 full_points = rotation(points)
-full_points = adjust_length(full_points, sphere_radius)
 
 # performing the lloyd relaxation algorithm
-result = lloyd_relaxation_algorithm(iteration, np.array(full_points), sphere_radius, np.array([0, 0, 0]))
+result = lloyd_relaxation_algorithm(iteration, np.array(full_points), np.array([0, 0, 0]))
+result = adjust_length(result, sphere_radius)
+print("drawing radius")
 radii = draw_radius(result, radius_factor)
 
 # generate golfball sphere, then trim it down to only the designated part
+print("generating golfball raw sphere")
 sphere = create_smooth_sphere(true_radius=sphere_radius, location=(0, 0, 0))
-result, radii = remove_outside_points_2(list(result), list(radii))
+print("cutting the sphere down to a segment")
+result, radii = remove_outside_points_2(result, radii)
 remove(sphere, sphere_radius)
 
 # generate dimples in the designated part
-for i in range(len(list(result))):
-    print("generating dimples: " + str(i) + "/" + str(len(list(result))))
+for i in range(len(result)):
+    print("generating dimples: " + str(i) + "/" + str(len(result)))
     create_hole_cut(shape, sphere_radius, sphere, radii[i], result[i], depth, degree_frustum_angle)
 
 # copy, rotate, and piece together these designated part to form a complete golfball
