@@ -2,9 +2,10 @@
 generate golfball using cube platonic solid as framework
 copy-paste the code into blender's text editor to run it
 make sure the viewport is in "object mode"
-modify input section for configurations (dimple number, depth, radius etc.)
+modify input section to change configurations (dimple number, depth, radius etc.)
 """
 import bpy
+import bmesh
 import numpy as np
 import mathutils
 from mathutils import Quaternion, Vector
@@ -86,10 +87,10 @@ def lloyd_relaxation_algorithm(iteration, points, center):
     point1 = np.array([])
     while i < iteration:
         point1 = points.copy()
-        sv = SphericalVoronoi(points, 1, center)
-        sv.sort_vertices_of_regions()
+        sv = SphericalVoronoi(points, 1, center)  # the OP function, without it the project would fail, huge thanks to scipy!
+        sv.sort_vertices_of_regions()  
         centroids = []
-        for region in sv.regions:
+        for region in sv.regions:  # after voronoi cells are generated, the next step is to generate centroids for each cell, this for loop does exactly that
             cross_product = np.cross(sv.vertices[region[0]] - sv.vertices[region[1]], sv.vertices[region[0]] - sv.vertices[region[2]])
             flat_region_point = [sv.vertices[region[0]], sv.vertices[region[1]], sv.vertices[region[2]]]
             for remaining_point in region[3:]:
@@ -105,10 +106,10 @@ def lloyd_relaxation_algorithm(iteration, points, center):
             polygon_yz = Polygon(flat_region_point_yz)
             centroid_yz = polygon_yz.centroid
             centroid_point = np.array([centroid_xy.x, centroid_xy.y, centroid_yz.y])
-            projected_central_point = centroid_point / np.linalg.norm(centroid_point)
-            centroids.append(projected_central_point)
+            centroids.append(centroid_point)
         points = list(np.array(centroids.copy()))
         points = remove_outside_points(points)
+        points = adjust_length(points, 1)
         points = rotation(points)
         print("performing lloyd relaxation: " + str(i) + "/" + str(iteration))
         i = i + 1
@@ -136,21 +137,21 @@ def cut(sphere, obj):
     bpy.context.view_layer.objects.active = sphere
     bpy.ops.object.modifier_apply(modifier=bool_modifier.name)
     bpy.data.objects.remove(obj)
-
-
-def create_hole_cut(shape, sphere_radius, sphere, radius, location, height, angle):
+    
+    
+def create_hole_cut(shape, sphere, radius, location):
     # generate a dimple on the sphere
     if shape == "sphere":
-        small_sphere_radius = height - sphere_radius + np.divide(2 * height * sphere_radius - np.square(height), (2 * (height - sphere_radius + np.sqrt(np.square(sphere_radius) - np.square(radius)))))
-        obj = create_smooth_sphere(true_radius=small_sphere_radius, location=location * (1 + (small_sphere_radius - height) / sphere_radius))
+        small_sphere_radius = depth - sphere_radius + np.divide(2 * depth * sphere_radius - np.square(depth), (2 * (depth - sphere_radius + np.sqrt(np.square(sphere_radius) - np.square(radius)))))
+        obj = create_smooth_sphere(true_radius=small_sphere_radius, location=location * (1 + (small_sphere_radius - depth) / sphere_radius))
     elif shape == "cone":
-        bottom_radius = (height * radius) / (height - sphere_radius + np.sqrt(np.square(sphere_radius)-np.square(radius)))
-        bpy.ops.mesh.primitive_cone_add(vertices=500, radius1=2*bottom_radius, radius2=0, depth=2*height, location = location) # adjust if needed
+        bottom_radius = (depth * radius) / (depth - sphere_radius + np.sqrt(np.square(sphere_radius) - np.square(radius)))
+        bpy.ops.mesh.primitive_cone_add(vertices=500, radius1=2*bottom_radius, radius2=0, depth=2 * depth, location = location) # adjust if needed
         obj = bpy.context.object
         rotate(obj, location)
     elif shape == "frustum":
         bottom_radius = radius + (sphere_radius - np.sqrt(np.square(sphere_radius)-np.square(radius))) / degree_frustum_angle[2]
-        bpy.ops.mesh.primitive_cone_add(vertices=500, radius1=bottom_radius + height / degree_frustum_angle[2], radius2=bottom_radius - height / degree_frustum_angle[2], depth=2*height, location = location) # adjust if needed
+        bpy.ops.mesh.primitive_cone_add(vertices=500, radius1=bottom_radius + depth / degree_frustum_angle[2], radius2=bottom_radius - depth / degree_frustum_angle[2], depth=2 * depth, location = location) # adjust if needed
         obj = bpy.context.object
         rotate(obj, location)
     else:
@@ -179,7 +180,7 @@ def create_smooth_sphere(true_radius, location):
     return cube
 
 
-def remove(sphere, sphere_radius):
+def remove(sphere):
     # trim the sphere down to the designated part
     locations = [(root_2*sphere_radius*0.75, 0, -1*root_2*sphere_radius*0.75), (-1*root_2*sphere_radius*0.75, -1*root_2*sphere_radius*0.75, 0), (-1*root_2*sphere_radius*0.75, root_2*sphere_radius*0.75, 0)]
     axis = [np.array([0, 1, 0]), np.array([0, 0, 1]), np.array([0, 0, 1])]
@@ -241,11 +242,28 @@ def piece_together(sphere):
     bpy.context.view_layer.objects.active = obj_collection[0]
     bpy.ops.object.join()
     
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)  # adjust if needed
-    bpy.ops.object.mode_set(mode='OBJECT')
+    print("cleaning up")
+    clean_up(bpy.context.active_object)
+
+
+def clean_up(obj):
+    # this function does two things: merge all vertices closer than the threshold, and delete all inner boundary face
+    mesh = obj.data
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
     
+    verts = bm.verts
+    bmesh.ops.remove_doubles(bm, verts=verts, dist=0.00001)  # adjust if needed
+    zero_verts = {v for v in verts if v.co.length < 0.0001}  # adjust if needed
+    faces_to_delete = {f for v in zero_verts for f in v.link_faces}
+    bmesh.ops.delete(bm, geom=list(faces_to_delete), context='FACES')
+
+    bm.to_mesh(mesh)
+    bm.free()
+
+    mesh.update()
+
 
 
 '''
@@ -301,12 +319,13 @@ print("generating golfball raw sphere")
 sphere = create_smooth_sphere(true_radius=sphere_radius, location=(0, 0, 0))
 print("cutting the sphere down to a segment")
 result, radii = remove_outside_points_2(result, radii)
-remove(sphere, sphere_radius)
+remove(sphere)
 
 # generate dimples in the designated part
 for i in range(len(result)):
     print("generating dimples: " + str(i) + "/" + str(len(result)))
-    create_hole_cut(shape, sphere_radius, sphere, radii[i], result[i], depth, degree_frustum_angle)
+    create_hole_cut(shape, sphere, radii[i], result[i])
 
 # copy, rotate, and piece together these designated part to form a complete golfball
 piece_together(sphere)
+print("Finished!")
