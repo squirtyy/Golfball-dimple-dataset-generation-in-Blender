@@ -117,14 +117,13 @@ def lloyd_relaxation_algorithm(iteration, points, center):
 
 
 def draw_radius(points, factor):
-    # draw radius given the position of each dimple center
+    # draw radius given the radius factor and the position of each dimple center
     radius = []
     for i in range(len(points)):
         distance = []
-        points1 = points.copy()
-        del points1[i]
-        for j in range(len(points1)):
-            distance.append(np.linalg.norm(points[i] - points1[j]))
+        for j in range(len(points)):
+            if j != i:
+                distance.append(np.linalg.norm(points[i] - points[j]))
         radius.append(min(distance) * 0.5)
     return [rad * factor for rad in radius]
 
@@ -137,8 +136,8 @@ def cut(sphere, obj):
     bpy.context.view_layer.objects.active = sphere
     bpy.ops.object.modifier_apply(modifier=bool_modifier.name)
     bpy.data.objects.remove(obj)
-    
-    
+
+
 def create_hole_cut(shape, sphere, radius, location):
     # generate a dimple on the sphere
     if shape == "sphere":
@@ -281,9 +280,9 @@ angle: this variable only applies to frustum, the bigger the angle, the steeper 
 
 #input
 sphere_radius = 42.6
-dimples_per_unit = 20
+dimples_per_unit = 19
 iteration = 1000
-radius_factor = 0.95
+radius_factor = 0.8
 depth = 0.5
 shape = "sphere" 
 angle = 70 
